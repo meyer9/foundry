@@ -278,12 +278,8 @@ where
         self.recovery.signed_payload(sequence, index)
     }
 
-    pub(crate) fn submission_hashes(&self, sequence: usize) -> Vec<B256> {
+    pub(crate) fn submission_hashes(&self, sequence: usize) -> (Vec<B256>, Vec<B256>) {
         self.recovery.submission_hashes(sequence)
-    }
-
-    pub(crate) fn signed_hashes(&self, sequence: usize) -> Vec<B256> {
-        self.recovery.signed_hashes(sequence)
     }
 
     pub(crate) fn persist_signed_payload(
@@ -336,7 +332,7 @@ where
         transaction: &N::TransactionResponse,
     ) -> Result<()>
     where
-        N::TransactionRequest: FoundryTransactionBuilder<N>,
+        N::TransactionRequest: FoundryTransactionBuilder<N> + From<N::TransactionResponse>,
     {
         let (sequence, index) =
             self.recovery.resolve_delegated_hash(attempt_id, hash, transaction)?;
@@ -677,6 +673,23 @@ mod tests {
     use alloy_network::Ethereum;
     use foundry_common::TransactionMaybeSigned;
 
+    fn unknown_delegated_sequence() -> (tempfile::TempDir, ScriptSequenceKind<Ethereum>, B256) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut deployment = ScriptSequence::<Ethereum> {
+            chain: 1,
+            paths: Some((dir.path().join("broadcast.json"), dir.path().join("cache.json"))),
+            ..Default::default()
+        };
+        deployment.transactions.push_back(TransactionWithMetadata::from_tx_request(
+            TransactionMaybeSigned::Unsigned(Default::default()),
+        ));
+        let mut sequence = ScriptSequenceKind::new_single(deployment, false).unwrap();
+        sequence.persist_delegated_request(0, 0, Default::default()).unwrap();
+        sequence.persist_delegated_status(0, 0, DelegatedStatus::OutcomeUnknown).unwrap();
+        let attempt = sequence.recovery.delegated_attempt_id(0, 0).unwrap();
+        (dir, sequence, attempt)
+    }
+
     #[test]
     fn publish_keeps_source_paths() {
         let dir = tempfile::tempdir().unwrap();
@@ -713,19 +726,7 @@ mod tests {
 
     #[test]
     fn delegated_outcome_requires_explicit_operator_resolution() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut deployment = ScriptSequence::<Ethereum> {
-            chain: 1,
-            paths: Some((dir.path().join("broadcast.json"), dir.path().join("cache.json"))),
-            ..Default::default()
-        };
-        deployment.transactions.push_back(TransactionWithMetadata::from_tx_request(
-            TransactionMaybeSigned::Unsigned(Default::default()),
-        ));
-        let mut sequence = ScriptSequenceKind::new_single(deployment, false).unwrap();
-        sequence.persist_delegated_request(0, 0, Default::default()).unwrap();
-        sequence.persist_delegated_status(0, 0, DelegatedStatus::OutcomeUnknown).unwrap();
-        let attempt = sequence.recovery.delegated_attempt_id(0, 0).unwrap();
+        let (_dir, mut sequence, attempt) = unknown_delegated_sequence();
         let hash = B256::repeat_byte(0x42);
 
         assert_eq!(
@@ -736,19 +737,7 @@ mod tests {
         assert!(matches!(sequence.delegated_status(0, 0), Some(DelegatedStatus::OutcomeUnknown)));
         assert!(sequence.sequences()[0].pending.is_empty());
 
-        let dir = tempfile::tempdir().unwrap();
-        let mut deployment = ScriptSequence::<Ethereum> {
-            chain: 1,
-            paths: Some((dir.path().join("broadcast.json"), dir.path().join("cache.json"))),
-            ..Default::default()
-        };
-        deployment.transactions.push_back(TransactionWithMetadata::from_tx_request(
-            TransactionMaybeSigned::Unsigned(Default::default()),
-        ));
-        let mut sequence = ScriptSequenceKind::new_single(deployment, false).unwrap();
-        sequence.persist_delegated_request(0, 0, Default::default()).unwrap();
-        sequence.persist_delegated_status(0, 0, DelegatedStatus::OutcomeUnknown).unwrap();
-        let attempt = sequence.recovery.delegated_attempt_id(0, 0).unwrap();
+        let (_dir, mut sequence, attempt) = unknown_delegated_sequence();
 
         sequence.restore_delegated_pending(Some(attempt), None, true).unwrap();
 
